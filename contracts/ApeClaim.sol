@@ -27,7 +27,7 @@ contract ApeClaim is Ownable, ReentrancyGuard {
     uint public TOTAL_PRINCIPAL = LPS_COUNT * LP_PRINCIPAL;
 
     // YX's address to receive the rewards.
-    address public YX = address(0x564286362092D8e7936f0549571a803B203aAceD);
+    address public YX = address(0x2482afB8d5136e9728fb0a7445CcaF95532DC614);
     // preserved YX rewards
     uint public YX_REWARDS = 3; // means amount will be divided by 109
     // indicate whether YX can start to claim the rewards.
