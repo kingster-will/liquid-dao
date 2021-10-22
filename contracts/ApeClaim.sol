@@ -7,8 +7,9 @@ import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract ApeClaim is Ownable {
+contract ApeClaim is Ownable, ReentrancyGuard {
 
     using EnumerableSet for EnumerableSet.AddressSet;
     using Address for address;
@@ -18,8 +19,12 @@ contract ApeClaim is Ownable {
     EnumerableSet.AddressSet private _whiteList;
     // indicate the whitelist has been audited and allow LPs proceed to claim.
     bool public whiteListConfirmed = false;
+    // Each LP's principal
+    uint public LP_PRINCIPAL = 1 ether;
     // Number of LPs
     uint public LPS_COUNT = 106;
+    // The total principal of all LPs
+    uint public TOTAL_PRINCIPAL = LPS_COUNT * LP_PRINCIPAL;
 
     // YX's address to receive the rewards.
     address public YX = address(0x564286362092D8e7936f0549571a803B203aAceD);
@@ -35,18 +40,17 @@ contract ApeClaim is Ownable {
     // record of amount that each LP has already claimed
     mapping (address => uint) public lpClaimed;
 
-    IERC20 public WETH = IERC20(address(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2));
-    //    address public BSC_ETH = "0x2170ed0880ac9a755fd29b2688956bd959f933f8";
-
     event AddedLP(address indexed lp_);
     event RemovedLP(address indexed lp_);
     event ConfirmedWhitelist();
     event Claimed(address indexed lp_, uint amount_);
     event ReleasedYXRewards(uint yxRewards_);
     event ClaimedYXRewards(address indexed yxAddress_, uint amount_);
+    event Received(address indexed from_, uint amount_);
+    event ReplacedLP(address indexed originLP_, address indexed newLP_);
 
     modifier whenWhiteListNotConfirmed() {
-        require(! whiteListConfirmed, "ApeClaim: whitelist has already been finalized");
+        require(! whiteListConfirmed, "ApeClaim: whitelist has already been locked and finalized");
         _;
     }
 
@@ -87,32 +91,48 @@ contract ApeClaim is Ownable {
     }
 
     function removeLP(address[] calldata lps_) external onlyOwner whenWhiteListNotConfirmed {
-        require(! whiteListConfirmed, "ApeClaim: whitelist has already been finalized");
         for (uint i = 0; i < lps_.length; i++) {
             require(_whiteList.remove(lps_[i]), "ApeClaim:: LP not exist");
             emit RemovedLP(lps_[i]);
         }
     }
 
-    function confirmWhiteList() external onlyOwner {
+    function replaceLP(address originLP_, address newLP_) external onlyOwner whenWhiteListNotConfirmed {
+        require(originLP_ != address(0));
+        require(newLP_ != address(0));
+        require(containsLP(originLP_), "ApeClaim: the original LP does not exist");
+        require(_whiteList.remove(originLP_), "ApeClaim:: LP not exist");
+        require(_whiteList.add(newLP_), "ApeClaim:: LP replace failed");
+        emit ReplacedLP(originLP_, newLP_);
+    }
+
+    function confirmAndLockWhiteList() external onlyOwner {
         require(_whiteList.length() == LPS_COUNT, "LPs count should exactly be 106");
         whiteListConfirmed = true;
         emit ConfirmedWhitelist();
     }
 
-    function claim() external whenWhiteListConfirmed onlyLP {
+    function claim() external whenWhiteListConfirmed onlyLP nonReentrant {
         uint amount = getClaimable(_msgSender());
         totalClaimed += amount;
         lpClaimed[_msgSender()] += amount;
-        WETH.safeTransfer(_msgSender(), amount);
+        payable(_msgSender()).transfer(amount);
         emit Claimed(_msgSender(), amount);
     }
 
     function getClaimable(address who_) view public returns(uint) {
         require(who_ != address(0x0));
         require(containsLP(who_), "ApeClaim: only support to get claimable amount of LP");
-        uint totalAmount = (WETH.balanceOf(address(this)) + totalClaimed);
-        uint lpQuotaAmount = totalAmount / (LPS_COUNT + YX_REWARDS);
+
+        uint totalAmount = (address(this).balance + totalClaimed);
+        uint lpQuotaAmount = 0;
+        // No reward before gain principal back
+        if (totalAmount <= TOTAL_PRINCIPAL) {
+            lpQuotaAmount = totalAmount / LPS_COUNT;
+        } else {
+            uint lpProfitAmount = (totalAmount - TOTAL_PRINCIPAL) / (LPS_COUNT + YX_REWARDS);
+            lpQuotaAmount = lpProfitAmount + LP_PRINCIPAL;
+        }
         require(lpQuotaAmount >= lpClaimed[who_]);
         uint lpClaimableAmount = lpQuotaAmount - lpClaimed[who_];
         return lpClaimableAmount;
@@ -126,17 +146,21 @@ contract ApeClaim is Ownable {
         emit ReleasedYXRewards(finalizedYXRewards_);
     }
 
-    function claimYXRewards() external onlyYX whenYXRewardsReleased {
+    function claimYXRewards() external onlyYX whenYXRewardsReleased nonReentrant {
         uint amount = getClaimableYXRewards();
         totalClaimed += amount;
         YX_REWARDS_CLAIMED += amount;
-        WETH.safeTransfer(_msgSender(), amount);
+        payable(_msgSender()).transfer(amount);
         emit ClaimedYXRewards(YX, amount);
     }
 
     function getClaimableYXRewards() public view returns(uint) {
-        uint totalAmount = (WETH.balanceOf(address(this)) + totalClaimed);
-        uint yxQuotaAmount = (totalAmount - LPS_COUNT) * YX_REWARDS / (LPS_COUNT + YX_REWARDS);
+        uint totalAmount = (address(this).balance + totalClaimed);
+        // YX would get rewards only after profit gained. ;-)
+        if (totalAmount <= TOTAL_PRINCIPAL) {
+            return 0;
+        }
+        uint yxQuotaAmount = (totalAmount - TOTAL_PRINCIPAL) * YX_REWARDS / (LPS_COUNT + YX_REWARDS);
         require(yxQuotaAmount >= YX_REWARDS_CLAIMED);
         uint yxClaimableAmount = yxQuotaAmount - YX_REWARDS_CLAIMED;
         return yxClaimableAmount;
@@ -153,5 +177,9 @@ contract ApeClaim is Ownable {
     function lpAtIndex(uint index) public view returns (address) {
         require(index < _whiteList.length(), "ApeClaim:: index out of bounds");
         return _whiteList.at(index);
+    }
+
+    receive() external payable {
+        emit Received(msg.sender, msg.value);
     }
 }
