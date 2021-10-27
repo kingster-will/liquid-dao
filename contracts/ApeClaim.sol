@@ -13,7 +13,6 @@ contract ApeClaim is Ownable, ReentrancyGuard {
 
     using EnumerableSet for EnumerableSet.AddressSet;
     using Address for address;
-    using SafeERC20 for IERC20;
 
     // List of all 106 LPs
     EnumerableSet.AddressSet private _whiteList;
@@ -112,11 +111,19 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         emit ConfirmedWhitelist();
     }
 
+    function _transferFund(address to_, uint amount_) internal virtual {
+        payable(to_).transfer(amount_);
+    }
+
+    function _getBalance(address who_) internal view virtual returns(uint) {
+        return who_.balance;
+    }
+
     function claim() external whenWhiteListConfirmed onlyLP nonReentrant {
         uint amount = getClaimable(_msgSender());
         totalClaimed += amount;
         lpClaimed[_msgSender()] += amount;
-        payable(_msgSender()).transfer(amount);
+        _transferFund(_msgSender(), amount);
         emit Claimed(_msgSender(), amount);
     }
 
@@ -124,7 +131,7 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         require(who_ != address(0x0));
         require(containsLP(who_), "ApeClaim: only support to get claimable amount of LP");
 
-        uint totalAmount = (address(this).balance + totalClaimed);
+        uint totalAmount = (_getBalance(address(this)) + totalClaimed);
         uint lpQuotaAmount = 0;
         // No reward before gain principal back
         if (totalAmount <= TOTAL_PRINCIPAL) {
@@ -150,12 +157,12 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         uint amount = getClaimableYXRewards();
         totalClaimed += amount;
         YX_REWARDS_CLAIMED += amount;
-        payable(_msgSender()).transfer(amount);
+        _transferFund(_msgSender(), amount);
         emit ClaimedYXRewards(YX, amount);
     }
 
     function getClaimableYXRewards() public view returns(uint) {
-        uint totalAmount = (address(this).balance + totalClaimed);
+        uint totalAmount = (_getBalance(address(this)) + totalClaimed);
         // YX would get rewards only after profit gained. ;-)
         if (totalAmount <= TOTAL_PRINCIPAL) {
             return 0;
