@@ -10,9 +10,21 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 contract ApeClaim is Ownable, ReentrancyGuard {
-
+    enum RequestStatus {PENDING, CANCELED, APPROVED, REJECTED}
     using EnumerableSet for EnumerableSet.AddressSet;
     using Address for address;
+
+    struct Request {
+        address requester; // sender of the request.
+        address newLPAddress; // new address the LP (requester).
+        uint nonce; // serial number allocated for each request.
+        uint timestamp; // time of the request creation.
+        RequestStatus status; // status of the request.
+    }
+    // mapping between a replacing LP request hash and the corresponding request nonce.
+    mapping(bytes32=>uint) public replaceLPRequestNonce;
+    // all replacing LP requests
+    Request[] public replaceLPRequests;
 
     // List of all 106 LPs
     EnumerableSet.AddressSet private _whiteList;
@@ -47,6 +59,30 @@ contract ApeClaim is Ownable, ReentrancyGuard {
     event ClaimedYXRewards(address indexed yxAddress_, uint amount_);
     event Received(address indexed from_, uint amount_);
     event ReplacedLP(address indexed originLP_, address indexed newLP_);
+    event ReplaceLPRequestAdd(
+        uint indexed nonce,
+        address indexed requester,
+        address indexed newLPAddress,
+        uint timestamp,
+        bytes32 requestHash
+    );
+    event ReplaceLPRequestCancel(uint indexed nonce, address indexed requester, bytes32 requestHash);
+
+    event ReplaceLPConfirmed(
+        uint indexed nonce,
+        address indexed requester,
+        address indexed newLPAddress,
+        uint timestamp,
+        bytes32 requestHash
+    );
+
+    event ReplaceLPRejected(
+        uint indexed nonce,
+        address indexed requester,
+        address indexed newLPAddress,
+        uint timestamp,
+        bytes32 requestHash
+    );
 
     modifier whenWhiteListNotConfirmed() {
         require(! whiteListConfirmed, "ApeClaim: whitelist has already been locked and finalized");
@@ -97,15 +133,161 @@ contract ApeClaim is Ownable, ReentrancyGuard {
     }
 
     function replaceLP(address originLP_, address newLP_) external onlyOwner whenWhiteListNotConfirmed {
-        require(originLP_ != address(0));
-        require(newLP_ != address(0));
-        require(containsLP(originLP_), "ApeClaim: the original LP does not exist");
-        require(_whiteList.remove(originLP_), "ApeClaim:: LP not exist");
-        require(_whiteList.add(newLP_), "ApeClaim:: LP replace failed");
-        emit ReplacedLP(originLP_, newLP_);
+        require(_replaceLP(originLP_, newLP_), "ApeClaim: failed to replace LP");
     }
 
-    function confirmAndLockWhiteList() external onlyOwner {
+    function addReplaceLPAddressRequest(address newLPAddress_) external onlyLP returns (bool) {
+        require(newLPAddress_ != address(0x0), "invalid new LP address");
+
+        uint nonce = replaceLPRequests.length;
+        uint timestamp = block.timestamp;
+
+        Request memory request = Request({
+        requester: msg.sender,
+        newLPAddress: newLPAddress_,
+        nonce: nonce,
+        timestamp: timestamp,
+        status: RequestStatus.PENDING
+        });
+
+        bytes32 requestHash = calcRequestHash(request);
+        replaceLPRequestNonce[requestHash] = nonce;
+        replaceLPRequests.push(request);
+
+        emit ReplaceLPRequestAdd(nonce, msg.sender, newLPAddress_, timestamp, requestHash);
+        return true;
+    }
+
+    function cancelReplaceLpRequest(bytes32 requestHash) external onlyLP returns (bool) {
+        uint nonce;
+        Request memory request;
+
+        (nonce, request) = getPendingReplaceLPRequest(requestHash);
+
+        require(msg.sender == request.requester, "cancel sender is different than pending request initiator");
+        replaceLPRequests[nonce].status = RequestStatus.CANCELED;
+
+        emit ReplaceLPRequestCancel(nonce, msg.sender, requestHash);
+        return true;
+    }
+
+    function confirmReplaceLPRequest(bytes32 requestHash) external onlyOwner returns (bool) {
+        uint nonce;
+        Request memory request;
+
+        (nonce, request) = getPendingReplaceLPRequest(requestHash);
+
+        replaceLPRequests[nonce].status = RequestStatus.APPROVED;
+
+        require(_replaceLP(request.requester, request.newLPAddress));
+
+        emit ReplaceLPConfirmed(
+            request.nonce,
+            request.requester,
+            request.newLPAddress,
+            request.timestamp,
+            requestHash
+        );
+        return true;
+    }
+
+    function _replaceLP(address currentLPAddress_, address newLPAddress_) internal returns (bool) {
+        require(currentLPAddress_ != address(0));
+        require(newLPAddress_ != address(0));
+        require(containsLP(currentLPAddress_), "ApeClaim: the original LP does not exist");
+        require(!containsLP(newLPAddress_), "ApeClaim: the new LP already exists.");
+
+        // replace whitelist with new LP
+        require(_whiteList.remove(currentLPAddress_), "ApeClaim:: LP not exist");
+        require(_whiteList.add(newLPAddress_), "ApeClaim:: LP replace failed");
+
+        // replace claimed amount with new LP
+        lpClaimed[newLPAddress_] = lpClaimed[currentLPAddress_];
+        delete lpClaimed[currentLPAddress_];
+
+        emit ReplacedLP(currentLPAddress_, newLPAddress_);
+        return true;
+    }
+
+    function rejectReplaceLPRequest(bytes32 requestHash) external onlyOwner returns (bool) {
+        uint nonce;
+        Request memory request;
+
+        (nonce, request) = getPendingReplaceLPRequest(requestHash);
+
+        replaceLPRequests[nonce].status = RequestStatus.REJECTED;
+
+        emit ReplaceLPRejected(
+            request.nonce,
+            request.requester,
+            request.newLPAddress,
+            request.timestamp,
+            requestHash
+        );
+        return true;
+    }
+
+    function calcRequestHash(Request memory request) internal pure returns (bytes32) {
+        return keccak256(abi.encode(
+                request.requester,
+                request.newLPAddress,
+                request.nonce,
+                request.timestamp
+            ));
+    }
+
+    function getReplaceLPRequest(uint nonce) external view returns (
+        uint requestNonce,
+        address requester,
+        address newLPAddress,
+        uint timestamp,
+        string memory status,
+        bytes32 requestHash
+    )
+    {
+        Request memory request = replaceLPRequests[nonce];
+        string memory statusString = getStatusString(request.status);
+
+        requestNonce = request.nonce;
+        requester = request.requester;
+        newLPAddress = request.newLPAddress;
+        timestamp = request.timestamp;
+        status = statusString;
+        requestHash = calcRequestHash(request);
+    }
+
+    function getReplaceLPRequestsLength() external view returns (uint length) {
+        return replaceLPRequests.length;
+    }
+    
+    function getPendingReplaceLPRequest(bytes32 requestHash) internal view returns (uint nonce, Request memory request) {
+        require(requestHash != 0, "request hash is 0");
+        nonce = replaceLPRequestNonce[requestHash];
+        request = replaceLPRequests[nonce];
+        validatePendingRequest(request, requestHash);
+    }
+    
+    function validatePendingRequest(Request memory request, bytes32 requestHash) internal pure {
+        require(request.status == RequestStatus.PENDING, "request is not pending");
+        require(requestHash == calcRequestHash(request), "given request hash does not match a pending request");
+    }
+
+    function getStatusString(RequestStatus status) internal pure returns (string memory) {
+        if (status == RequestStatus.PENDING) {
+            return "pending";
+        } else if (status == RequestStatus.CANCELED) {
+            return "canceled";
+        } else if (status == RequestStatus.APPROVED) {
+            return "approved";
+        } else if (status == RequestStatus.REJECTED) {
+            return "rejected";
+        } else {
+            // this fallback can never be reached.
+            return "unknown";
+        }
+    }
+
+    function confirmWhiteList() external onlyOwner {
         require(_whiteList.length() == LPS_COUNT, "LPs count should exactly be 106");
         whiteListConfirmed = true;
         emit ConfirmedWhitelist();
@@ -119,12 +301,23 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         return who_.balance;
     }
 
-    function claim() external whenWhiteListConfirmed onlyLP nonReentrant {
-        uint amount = getClaimable(_msgSender());
+    function _claim(address lp_) internal {
+        uint amount = getClaimable(lp_);
         totalClaimed += amount;
-        lpClaimed[_msgSender()] += amount;
-        _transferFund(_msgSender(), amount);
-        emit Claimed(_msgSender(), amount);
+        lpClaimed[lp_] += amount;
+        _transferFund(lp_, amount);
+        emit Claimed(lp_, amount);
+    }
+
+    function claim() external whenWhiteListConfirmed onlyLP nonReentrant {
+        _claim(_msgSender());
+    }
+
+    function claimForAll() external whenWhiteListConfirmed nonReentrant {
+        uint length = _whiteList.length();
+        for (uint i = 0; i < length; i++) {
+            _claim(_whiteList[i]);
+        }
     }
 
     function getClaimable(address who_) view public returns(uint) {
@@ -171,6 +364,15 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         require(yxQuotaAmount >= YX_REWARDS_CLAIMED);
         uint yxClaimableAmount = yxQuotaAmount - YX_REWARDS_CLAIMED;
         return yxClaimableAmount;
+    }
+
+    function pullFunds(address tokenAddress_) onlyOwner external {
+        if (tokenAddress_ == address(0)) {
+            _msgSender().transfer(address(this).balance);
+        } else {
+            IERC20 token = IERC20(tokenAddress_);
+            token.transfer(_msgSender(), token.balanceOf(address(this)));
+        }
     }
 
     function containsLP(address lp_) public view returns (bool) {
