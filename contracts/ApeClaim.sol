@@ -58,6 +58,8 @@ contract ApeClaim is Ownable, ReentrancyGuard {
     event ReleasedYXRewards(uint yxRewards_);
     event ClaimedYXRewards(address indexed yxAddress_, uint amount_);
     event Received(address indexed from_, uint amount_);
+    event PullFund(address indexed to_, uint amount_);
+    event PullFundERC20(address token_, address indexed to_, uint amount_);
     event ReplacedLP(address indexed originLP_, address indexed newLP_);
     event ReplaceLPRequestAdd(
         uint indexed nonce,
@@ -313,13 +315,6 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         _claim(_msgSender());
     }
 
-    function claimForAll() external whenWhiteListConfirmed nonReentrant {
-        uint length = _whiteList.length();
-        for (uint i = 0; i < length; i++) {
-            _claim(_whiteList[i]);
-        }
-    }
-
     function getClaimable(address who_) view public returns(uint) {
         require(who_ != address(0x0));
         require(containsLP(who_), "ApeClaim: only support to get claimable amount of LP");
@@ -336,6 +331,13 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         require(lpQuotaAmount >= lpClaimed[who_]);
         uint lpClaimableAmount = lpQuotaAmount - lpClaimed[who_];
         return lpClaimableAmount;
+    }
+
+    function releaseToAll() external whenWhiteListConfirmed nonReentrant {
+        uint length = _whiteList.length();
+        for (uint i = 0; i < length; i++) {
+            _claim(_whiteList.at(i));
+        }
     }
 
     function releaseYXRewards(uint finalizedYXRewards_) external onlyOwner whenWhiteListConfirmed whenYXRewardsNotReleased {
@@ -368,10 +370,12 @@ contract ApeClaim is Ownable, ReentrancyGuard {
 
     function pullFunds(address tokenAddress_) onlyOwner external {
         if (tokenAddress_ == address(0)) {
-            _msgSender().transfer(address(this).balance);
+            payable(_msgSender()).transfer(address(this).balance);
+            emit PullFund(_msgSender(), address(this).balance);
         } else {
             IERC20 token = IERC20(tokenAddress_);
             token.transfer(_msgSender(), token.balanceOf(address(this)));
+            emit PullFundERC20(tokenAddress_, _msgSender(), token.balanceOf(address(this)));
         }
     }
 
