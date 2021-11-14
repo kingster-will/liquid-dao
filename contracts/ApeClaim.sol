@@ -37,14 +37,14 @@ contract ApeClaim is Ownable, ReentrancyGuard {
     // The total principal of all LPs
     uint public TOTAL_PRINCIPAL = LPS_COUNT * LP_PRINCIPAL;
 
-    // YX's address to receive the rewards.
-    address public YX = address(0x2482afB8d5136e9728fb0a7445CcaF95532DC614);
-    // preserved YX rewards
-    uint public YX_REWARDS = 3; // means amount will be divided by 109
-    // indicate whether YX can start to claim the rewards.
-    bool public YX_REWARDS_RELEASED = false;
-    // How much rewards YX has already claimed.
-    uint public YX_REWARDS_CLAIMED;
+    // GP's address to receive the rewards.
+    address public GP = address(0x2482afB8d5136e9728fb0a7445CcaF95532DC614);
+    // preserved GP rewards
+    uint public GP_REWARDS = 3; // means amount will be divided by 109
+    // indicate whether GP can start to claim the rewards.
+    bool public GP_REWARDS_RELEASED = false;
+    // How much rewards GP has already claimed.
+    uint public GP_REWARDS_CLAIMED;
 
     // Total amount has been claimed from this contract.
     uint public totalClaimed;
@@ -55,8 +55,8 @@ contract ApeClaim is Ownable, ReentrancyGuard {
     event RemovedLP(address indexed lp_);
     event ConfirmedWhitelist();
     event Claimed(address indexed lp_, uint amount_);
-    event ReleasedYXRewards(uint yxRewards_);
-    event ClaimedYXRewards(address indexed yxAddress_, uint amount_);
+    event ReleasedGPRewards(uint gpRewards_);
+    event ClaimedGPRewards(address indexed gpAddress_, uint amount_);
     event Received(address indexed from_, uint amount_);
     event PullFund(address indexed to_, uint amount_);
     event PullFundERC20(address token_, address indexed to_, uint amount_);
@@ -96,8 +96,8 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         _;
     }
 
-    modifier onlyYX() {
-        require(_msgSender() == YX, "ApeClaim: only YX can call this function");
+    modifier onlyGP() {
+        require(_msgSender() == GP, "ApeClaim: only GP can call this function");
         _;
     }
 
@@ -106,13 +106,13 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         _;
     }
 
-    modifier whenYXRewardsReleased() {
-        require(YX_REWARDS_RELEASED, "ApeClaim: YX's rewards has not been released yet");
+    modifier whenGPRewardsReleased() {
+        require(GP_REWARDS_RELEASED, "ApeClaim: GP's rewards has not been released yet");
         _;
     }
 
-    modifier whenYXRewardsNotReleased() {
-        require(! YX_REWARDS_RELEASED, "ApeClaim: YX's rewards has been already released");
+    modifier whenGPRewardsNotReleased() {
+        require(! GP_REWARDS_RELEASED, "ApeClaim: GP's rewards has been already released");
         _;
     }
 
@@ -325,7 +325,7 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         if (totalAmount <= TOTAL_PRINCIPAL) {
             lpQuotaAmount = totalAmount / LPS_COUNT;
         } else {
-            uint lpProfitAmount = (totalAmount - TOTAL_PRINCIPAL) / (LPS_COUNT + YX_REWARDS);
+            uint lpProfitAmount = (totalAmount - TOTAL_PRINCIPAL) / (LPS_COUNT + GP_REWARDS);
             lpQuotaAmount = lpProfitAmount + LP_PRINCIPAL;
         }
         require(lpQuotaAmount >= lpClaimed[who_]);
@@ -340,32 +340,32 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         }
     }
 
-    function releaseYXRewards(uint finalizedYXRewards_) external onlyOwner whenWhiteListConfirmed whenYXRewardsNotReleased {
-        require(finalizedYXRewards_ >= 2 && finalizedYXRewards_ <= 3, "YX rewards should be either 2 or 3");
-        // the final rewards must be less than or equals to preserved YX rewards, so that other LP can claim properly.
-        require(finalizedYXRewards_ <= YX_REWARDS);
-        YX_REWARDS_RELEASED = true;
-        emit ReleasedYXRewards(finalizedYXRewards_);
+    function releaseGPRewards(uint finalizedGPRewards_) external onlyOwner whenWhiteListConfirmed whenGPRewardsNotReleased {
+        require(finalizedGPRewards_ >= 2 && finalizedGPRewards_ <= 3, "GP rewards should be either 2 or 3");
+        // the final rewards must be less than or equals to preserved GP rewards, so that other LP can claim properly.
+        require(finalizedGPRewards_ <= GP_REWARDS);
+        GP_REWARDS_RELEASED = true;
+        emit ReleasedGPRewards(finalizedGPRewards_);
     }
 
-    function claimYXRewards() external onlyYX whenYXRewardsReleased nonReentrant {
-        uint amount = getClaimableYXRewards();
+    function claimGPRewards() external onlyGP whenGPRewardsReleased nonReentrant {
+        uint amount = getClaimableGPRewards();
         totalClaimed += amount;
-        YX_REWARDS_CLAIMED += amount;
+        GP_REWARDS_CLAIMED += amount;
         _transferFund(_msgSender(), amount);
-        emit ClaimedYXRewards(YX, amount);
+        emit ClaimedGPRewards(GP, amount);
     }
 
-    function getClaimableYXRewards() public view returns(uint) {
+    function getClaimableGPRewards() public view returns(uint) {
         uint totalAmount = (_getBalance(address(this)) + totalClaimed);
-        // YX would get rewards only after profit gained. ;-)
+        // GP would get rewards only after profit gained. ;-)
         if (totalAmount <= TOTAL_PRINCIPAL) {
             return 0;
         }
-        uint yxQuotaAmount = (totalAmount - TOTAL_PRINCIPAL) * YX_REWARDS / (LPS_COUNT + YX_REWARDS);
-        require(yxQuotaAmount >= YX_REWARDS_CLAIMED);
-        uint yxClaimableAmount = yxQuotaAmount - YX_REWARDS_CLAIMED;
-        return yxClaimableAmount;
+        uint gpQuotaAmount = (totalAmount - TOTAL_PRINCIPAL) * GP_REWARDS / (LPS_COUNT + GP_REWARDS);
+        require(gpQuotaAmount >= GP_REWARDS_CLAIMED);
+        uint gpClaimableAmount = gpQuotaAmount - GP_REWARDS_CLAIMED;
+        return gpClaimableAmount;
     }
 
     function pullFunds(address tokenAddress_) onlyOwner external {
