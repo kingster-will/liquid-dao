@@ -344,6 +344,7 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         require(finalizedGPRewards_ >= 2 && finalizedGPRewards_ <= 3, "GP rewards should be either 2 or 3");
         // the final rewards must be less than or equals to preserved GP rewards, so that other LP can claim properly.
         require(finalizedGPRewards_ <= GP_REWARDS);
+        GP_REWARDS = finalizedGPRewards_;
         GP_REWARDS_RELEASED = true;
         emit ReleasedGPRewards(finalizedGPRewards_);
     }
