@@ -393,6 +393,35 @@ contract ApeClaim is Ownable, ReentrancyGuard {
         return _whiteList.at(index);
     }
 
+    function listAllLPs() external view returns (string memory) {
+        string memory allLPs ;
+        for (uint i = 0; i < _whiteList.length(); i++) {
+            if (i == 0) {
+                allLPs = string(abi.encodePacked("0x", toAsciiString(_whiteList.at(i))));
+            } else {
+                allLPs = string(abi.encodePacked(allLPs, ", 0x", toAsciiString(_whiteList.at(i))));
+            }
+        }
+        return allLPs;
+    }
+
+    function toAsciiString(address x) internal pure returns (string memory) {
+        bytes memory s = new bytes(40);
+        for (uint i = 0; i < 20; i++) {
+            bytes1 b = bytes1(uint8(uint(uint160(x)) / (2**(8*(19 - i)))));
+            bytes1 hi = bytes1(uint8(b) / 16);
+            bytes1 lo = bytes1(uint8(b) - 16 * uint8(hi));
+            s[2*i] = char(hi);
+            s[2*i+1] = char(lo);
+        }
+        return string(s);
+    }
+
+    function char(bytes1 b) internal pure returns (bytes1 c) {
+        if (uint8(b) < 10) return bytes1(uint8(b) + 0x30);
+        else return bytes1(uint8(b) + 0x57);
+    }
+
     receive() external payable {
         emit Received(msg.sender, msg.value);
     }
